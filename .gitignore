@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# runtime state — position/P&L history and logs are machine-specific,
+# not something you want to commit (and definitely don't commit
+# ALPACA_KEY / ALPACA_SECRET if you put them in a .env file)
+state/*.json
+logs/*.log
+logs/*.jsonl
+.env

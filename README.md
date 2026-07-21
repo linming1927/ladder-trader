@@ -24,20 +24,24 @@ level 3 buy   price <= baseline * (1 - 3*step)      ... up to --levels
 sell (all)    price >= baseline * (1 + step), while holding
 ```
 
-Default `step` is 3%, default `--levels` is 3. The level index itself
-provides hysteresis — no time-based cooldown needed, unlike a moving-
-average crossover strategy.
+Default `step` is 3%, default `--levels` is 3. `--max-notional`
+(default **$2000**) caps total dollars committed to one symbol while
+a position is open — a level that would push past it doesn't fire,
+even if `--levels` allows more room. Pass `--max-notional 0` to
+disable it. The level index itself provides hysteresis — no
+time-based cooldown needed, unlike a moving-average crossover
+strategy.
 
 ### ⚠️ Read this before running it against real money decisions
 
 This is a **grid / martingale-style averaging-down ladder**: exposure
 *grows* as price falls further, which is backwards from "cut losses,
-let winners run." It has **no stop-loss and no cap** beyond
-`levels * qty`. It does fine in a range-bound week and can compound
-badly in a sustained trend. That's not a bug — it's the current,
-deliberate state of the strategy, carried over unchanged from the
-original project. A few good weeks of score-only output prove nothing
-about the one week a real trend runs through it.
+let winners run." There is still **no stop-loss** — `--levels` and
+`--max-notional` cap how much MORE can be added to a losing position,
+they do not close one. That's not a bug — it's the current, deliberate
+state of the strategy, carried over unchanged from the original
+project. A few good weeks of score-only output prove nothing about
+the one week a real trend runs through it.
 
 ## Setup
 
@@ -76,6 +80,76 @@ python3 runner.py --symbols SPY --baseline SPY:512.30
 
 Every following week re-anchors automatically — the manual override
 only ever applies to a symbol's very first baseline.
+
+## Live paper trading (`--live`)
+
+By default this runs score-only — it tracks what the ladder *would*
+have done, no real orders. Pass `--live` to actually place market
+orders on whichever Alpaca **paper** account `ALPACA_KEY`/
+`ALPACA_SECRET` point to:
+
+```bash
+python3 runner.py --symbols SPY,QQQ --live
+```
+
+`broker.py` is hard-coded to Alpaca's paper endpoint
+(`paper-api.alpaca.markets`) — there's no flag or env var anywhere in
+this project that can point it at a live/real-money account.
+
+**This does not add a stop-loss.** The strategy's own no-stop-loss
+design (see `ladder_strategy.py`'s module docstring) is unchanged —
+`--live` just means its signals now move real (paper) shares instead
+of only updating a scorecard. `--levels * --qty` shares AND
+`--max-notional` dollars (default $2000, per symbol) are your only
+caps on exposure — neither one closes a losing position, they only
+limit how much more can be added to it.
+
+### Running against a dedicated paper account
+
+If you want this project trading in a *different* paper account than
+another bot/process (e.g. keeping it separate from `fpga-tick-engine`'s
+account), open a new paper account from Alpaca's dashboard (account
+switcher, top-left → "Open New Paper Account"), grab that account's
+own API key pair, and point THIS project's `ALPACA_KEY`/
+`ALPACA_SECRET` at it. Each paper account has independent keys,
+balance, and positions — nothing about running two side by side
+requires coordination between them.
+
+### What `--live` actually does, and the safety properties it adds
+
+Every BUY/SELL signal the ladder generates becomes a market order
+(`live_trader.py`), with a few things that matter once real orders are
+involved, on top of the strategy logic itself:
+
+- **One order in flight per symbol at a time.** A signal that fires
+  while a previous order for that symbol hasn't resolved yet is
+  logged and dropped, never queued or double-submitted.
+- **Orders are skipped while the market is closed**, not queued for
+  later.
+- **Cost basis comes from the order's real fill price**, not the tick
+  that triggered the signal.
+- **Startup reconciliation.** Before connecting to the feed, it
+  compares the broker's actual reported position against your locally
+  persisted `state.json` and logs a loud warning on any mismatch — it
+  does not try to guess/repair `levels_bought`, since a raw share
+  count doesn't uniquely map back to a level count if `--qty` ever
+  changed between runs. Check the log if you see this warning before
+  trusting the numbers.
+- **A SELL always sells the broker's actual current position size**,
+  never the locally-tracked qty — so state drift (a crash before a
+  save, a manual trade on the same account) can never cause an attempt
+  to sell more than is actually held.
+
+`--live` cannot be combined with `--source sim` — sim prices are a
+synthetic random walk unrelated to the real market, so real orders
+driven by them would fill at whatever the *actual* market price
+happens to be, not the synthetic trigger price.
+
+```bash
+python3 tests/test_live_trader.py   # exercises all of the above
+                                    # against an in-memory fake broker
+                                    # — no network, no real account
+```
 
 ## Keeping it running
 
@@ -152,20 +226,25 @@ they're machine-local runtime state, not source.
 python3 runner.py --help
 ```
 
-Key flags: `--symbols`, `--step`, `--levels`, `--qty`, `--method`
+Key flags: `--symbols`, `--step`, `--levels`, `--qty`, `--max-notional`
+(per-symbol $ cap, default $2000, `0` disables), `--method`
 (baseline calc: `friday_close` / `week_avg_close` / `week_vwap` /
 `week_midpoint`), `--baseline` (manual first-week override),
 `--feed` (`iex` or `sip`, matching your Alpaca market-data plan),
-`--report-every-s` (status-report cadence).
+`--report-every-s` (status-report cadence), `--live` (place real
+paper-account orders — see the section above).
 
 ## Tests
 
 ```bash
-python3 tests/test_ladder_strategy.py
+python3 tests/test_ladder_strategy.py    # strategy math — 61 checks,
+                                         # ported from the original
+                                         # project's test suite, plus
+                                         # the $ cap added here
+python3 tests/test_live_trader.py        # --live's order-placement
+                                         # logic — 13 checks, against
+                                         # an in-memory fake broker
 ```
-50 checks, ported from the original project's test suite — the
-strategy math itself (`ladder_strategy.py`) is unchanged from
-`fpga-tick-engine`, only its tick source changed.
 
 ## Where this came from
 
@@ -188,11 +267,20 @@ project only ever runs the one strategy.
 
 ## Pushing to git
 
+You already have `https://github.com/linming1927/ladder-trader` with
+just a README in it. Clone it, copy this project's files in over the
+top (replacing that placeholder README with this one), and push:
+
 ```bash
-git init
+git clone https://github.com/linming1927/ladder-trader.git
+cp -r /path/to/unzipped/ladder-trader/. ladder-trader/
+cd ladder-trader
 git add -A
-git commit -m "Initial commit: standalone ladder strategy runner"
-git remote add origin <your-new-repo-url>
-git push -u origin main
+git commit -m "Standalone ladder strategy: FPGA-free runner, live paper trading, per-symbol $ cap"
+git push
 ```
-# ladder-trader
+
+(I tried the "git init fresh + merge" alternative first — it hits a
+real `README.md` add/add conflict, since both repos independently
+create that file with no shared history to merge against. Cloning
+first sidesteps that entirely, so it's the one to use.)
