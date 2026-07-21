@@ -48,10 +48,36 @@ the one week a real trend runs through it.
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+```
 
+Credentials: `ALPACA_KEY`/`ALPACA_SECRET` need to be set before running
+`runner.py`. Two ways to do that:
+
+**Real shell exports** — fine for one-off runs in a terminal:
+```bash
 export ALPACA_KEY=your_key
 export ALPACA_SECRET=your_secret
 ```
+These only last for that terminal session, and if you also add them
+to `~/.bashrc`/`~/.zshrc` for persistence, remember they're **global to
+every terminal** — if `fpga-tick-engine` (or anything else) uses the
+same account/keys, that's fine, but if it uses a *different* Alpaca
+account and you export both projects' keys under the same
+`ALPACA_KEY`/`ALPACA_SECRET` names in your shell profile, whichever
+line comes last wins, everywhere, for both projects.
+
+**A project-local `.env` file** — the better option if this project's
+Alpaca account is different from another project's, since it's
+persistent (survives closing the terminal) without touching your
+shell profile or colliding with anything else:
+```bash
+cp .env.example .env
+nano .env    # fill in this project's own paper account's key + secret
+```
+`runner.py` loads `.env` automatically (`env.py`, stdlib only, no
+extra dependency) — a real `export` in your shell still takes priority
+over it if both are set. `.env` is already in `.gitignore`, so it
+never gets committed.
 
 Smoke-test the whole pipeline (state persistence, reporting, weekly
 re-anchor bookkeeping) with synthetic ticks — no credentials or market
@@ -110,10 +136,11 @@ If you want this project trading in a *different* paper account than
 another bot/process (e.g. keeping it separate from `fpga-tick-engine`'s
 account), open a new paper account from Alpaca's dashboard (account
 switcher, top-left → "Open New Paper Account"), grab that account's
-own API key pair, and point THIS project's `ALPACA_KEY`/
-`ALPACA_SECRET` at it. Each paper account has independent keys,
-balance, and positions — nothing about running two side by side
-requires coordination between them.
+own API key pair, and put them in THIS project's own `.env` file (see
+Setup above) — that keeps it separate from whatever `fpga-tick-engine`
+or anything else has exported globally. Each paper account has
+independent keys, balance, and positions — nothing about running two
+side by side requires coordination between them.
 
 ### What `--live` actually does, and the safety properties it adds
 

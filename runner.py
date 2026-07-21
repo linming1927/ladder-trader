@@ -294,6 +294,9 @@ def setup_logging(args):
 
 
 def main():
+    from env import load_dotenv
+    load_dotenv()   # loads ./.env if present — real `export`s still win
+
     args = build_argparser().parse_args()
     if args.live and args.source == "sim":
         sys.exit("--live cannot be combined with --source sim — sim "
