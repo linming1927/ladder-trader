@@ -212,7 +212,8 @@ class LadderRunner:
         else:
             from feed import AlpacaTradeFeed
             self.feed = AlpacaTradeFeed(self.symbols, self.on_trade,
-                                        feed=self.args.feed)
+                                        feed=self.args.feed,
+                                        relay_url=self.args.relay_url)
             self.feed.run()      # blocks until stop()
 
         statefile.save(self.card, self.baseline_week, self.args.state_file)
@@ -262,7 +263,17 @@ def build_argparser() -> argparse.ArgumentParser:
                     help="alpaca: live trades (needs ALPACA_KEY/SECRET). "
                         "sim: synthetic random walk, for smoke-testing")
     ap.add_argument("--feed", choices=["iex", "sip"], default="iex",
-                    help="Alpaca data feed tier (sip needs a paid plan)")
+                    help="Alpaca data feed tier (sip needs a paid plan). "
+                        "Ignored when --relay-url is set — the relay's "
+                        "own --feed choice controls this instead.")
+    ap.add_argument("--relay-url", default=None,
+                    help="connect to a local alpaca_relay.py instance "
+                        "instead of Alpaca directly, e.g. "
+                        "ws://localhost:8765 — use this when running "
+                        "alongside another project that also wants a "
+                        "live Alpaca connection at the same time (only "
+                        "one direct connection is allowed per Alpaca "
+                        "login). See alpaca_relay.py's module docstring.")
     ap.add_argument("--live", action="store_true",
                     help="place REAL market orders on the Alpaca PAPER "
                         "account ALPACA_KEY/ALPACA_SECRET point to, "

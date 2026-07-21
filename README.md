@@ -178,6 +178,53 @@ python3 tests/test_live_trader.py   # exercises all of the above
                                     # — no network, no real account
 ```
 
+## Running alongside another project (`alpaca_relay.py`)
+
+Alpaca allows exactly one direct market-data connection per login —
+confirmed in their own docs to hold even on paid tiers like Algo
+Trader Plus, so a plan upgrade doesn't fix this. If you want
+`ladder-trader` running its live feed at the same time as another
+project (e.g. `fpga-tick-engine`), even under a completely different
+paper account, only one of them can hold that connection directly.
+
+`alpaca_relay.py` fixes this: it holds the one real connection and
+re-serves it locally to as many processes as connect, each with its
+own dynamic symbol subscription. It speaks enough of Alpaca's own
+protocol that **neither project's client code needs to change** — you
+just point the URL at the relay instead of Alpaca directly. This is
+read-only market data; it has no path to order placement, which stays
+a separate, per-project, per-account REST connection exactly as
+before — you'll still see `ladder-trader`'s trades in its own account
+and `fpga-tick-engine`'s trades in its own, completely independently.
+
+**Run the relay** (needs either project's Alpaca keys — market data
+itself isn't account-specific):
+```bash
+python3 alpaca_relay.py --port 8765
+```
+
+**Point `ladder-trader` at it:**
+```bash
+python3 runner.py --symbols SPY,QQQ --live --relay-url ws://localhost:8765
+```
+
+**Point `fpga-tick-engine` at it** (same flag, added to both
+`bridge.py` and `order_manager.py` there):
+```bash
+python3 host/order_manager.py --source alpaca --relay-url ws://localhost:8765 ...
+```
+
+Subscriptions are unioned dynamically — it doesn't matter which
+project asks for which symbols or in what order; each downstream
+client only ever receives ticks for the symbols *it* subscribed to.
+
+```bash
+python3 tests/test_relay.py   # 16 checks, including an end-to-end
+                              # round trip using this project's REAL
+                              # feed.py client — no real Alpaca
+                              # connection needed for any of it
+```
+
 ## Keeping it running
 
 The process itself is resilient to network drops (`feed.py`
@@ -258,8 +305,10 @@ Key flags: `--symbols`, `--step`, `--levels`, `--qty`, `--max-notional`
 (baseline calc: `friday_close` / `week_avg_close` / `week_vwap` /
 `week_midpoint`), `--baseline` (manual first-week override),
 `--feed` (`iex` or `sip`, matching your Alpaca market-data plan),
-`--report-every-s` (status-report cadence), `--live` (place real
-paper-account orders — see the section above).
+`--relay-url` (run through `alpaca_relay.py` instead of connecting to
+Alpaca directly — see the section above), `--report-every-s`
+(status-report cadence), `--live` (place real paper-account orders —
+see the section above).
 
 ## Tests
 
@@ -271,6 +320,9 @@ python3 tests/test_ladder_strategy.py    # strategy math — 61 checks,
 python3 tests/test_live_trader.py        # --live's order-placement
                                          # logic — 13 checks, against
                                          # an in-memory fake broker
+python3 tests/test_relay.py              # alpaca_relay.py — 16 checks,
+                                         # real local websockets, no
+                                         # real Alpaca connection
 ```
 
 ## Where this came from
