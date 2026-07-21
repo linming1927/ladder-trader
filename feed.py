@@ -72,15 +72,24 @@ class AlpacaTradeFeed:
         backoff = 1
 
         while not self._stop.is_set():
-            got_subscribed = threading.Event()
+            authenticated = threading.Event()   # set only on a REAL
+                                                # "authenticated" reply —
+                                                # this is what the
+                                                # backoff reset below
+                                                # keys off of, so a
+                                                # rejected handshake
+                                                # (e.g. "connection
+                                                # limit exceeded")
+                                                # correctly backs off
+                                                # instead of hammering
+                                                # the server every ~1s
 
             def on_open(ws):
                 ws.send(json.dumps({"action": "auth", "key": self.key,
                                     "secret": self.secret}))
                 ws.send(json.dumps({"action": "subscribe",
                                     "trades": self.symbols}))
-                log.info("subscribed to trades: %s", self.symbols)
-                got_subscribed.set()
+                log.info("sent auth + subscribe for: %s", self.symbols)
 
             def on_message(ws, message):
                 for m in json.loads(message):
@@ -91,6 +100,9 @@ class AlpacaTradeFeed:
                                          int(m.get("s", 0)))
                         except Exception:
                             log.exception("on_trade callback raised")
+                    elif t == "success" and m.get("msg") == "authenticated":
+                        authenticated.set()
+                        log.info("authenticated — subscription confirmed")
                     elif t == "error":
                         log.error("alpaca stream error: %s", m)
 
@@ -109,8 +121,12 @@ class AlpacaTradeFeed:
                 return
             log.warning("disconnected — reconnecting in %ss", backoff)
             time.sleep(backoff)
-            # only back off if we never actually got subscribed this
-            # attempt; a connection that worked and later dropped
-            # (e.g. laptop woke from sleep) should retry fast, not
-            # inherit a stale long backoff from an earlier outage
-            backoff = 1 if got_subscribed.is_set() else min(backoff * 2, 60)
+            # only reset backoff to fast-retry if we were GENUINELY
+            # authenticated this attempt and later dropped (e.g. wifi
+            # blip, laptop sleep/wake) — a handshake that never
+            # actually succeeded (auth failure, "connection limit
+            # exceeded", etc.) must back off properly instead of
+            # hammering the server every ~1s, which can itself keep
+            # colliding with a session that hasn't finished clearing
+            # server-side yet
+            backoff = 1 if authenticated.is_set() else min(backoff * 2, 60)
